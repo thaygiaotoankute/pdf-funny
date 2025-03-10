@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR PDF với Server AI</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container { max-width: 900px; }
+        #resultContainer { display: none; }
+        #resultText { height: 400px; overflow-y: auto; }
+        #logArea { height: 150px; overflow-y: auto; background-color: #f8f9fa; padding: 10px; border-radius: 5px; }
+        .progress { height: 25px; }
+        .hardware-id-container { 
+            border: 1px solid #dee2e6; 
+            border-radius: 5px; 
+            padding: 15px; 
+            margin-bottom: 20px; 
+        }
+        .card-body img { max-width: 100%; }
+    </style>
+</head>
+<body>
+    <div class="container my-4">
+        <h1 class="text-center mb-4">OCR PDF với Server AI</h1>
+        
+        <!-- Hardware ID Section -->
+        <div class="hardware-id-container">
+            <h4>Hardware ID</h4>
+            <div class="row mb-2">
+                <div class="col">
+                    <input type="text" id="hardwareId" class="form-control" readonly>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col">
+                    <div id="activationStatus" class="alert alert-warning">
+                        Trạng thái: CHƯA KÍCH HOẠT
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Upload Section -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Chọn file PDF</h5>
+            </div>
+            <div class="card-body">
+                <form id="uploadForm">
+                    <div class="mb-3">
+                        <input class="form-control" type="file" id="pdfFile" accept=".pdf" disabled>
+                        <div id="fileInfo" class="form-text">Chưa chọn file nào</div>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary" id="processBtn" disabled>Xử lý OCR</button>
+                    </div>
+                </form>
+
+                <div class="mt-3">
+                    <div class="progress mb-2">
+                        <div class="progress-bar" id="progressBar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                    </div>
+                    <div id="statusText" class="text-center">Sẵn sàng</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Log Area -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Nhật ký hoạt động</h5>
+            </div>
+            <div class="card-body">
+                <div id="logArea"></div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultContainer" class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Kết quả OCR</h5>
+                <div>
+                    <button id="btnViewImages" class="btn btn-info btn-sm me-2" disabled>Xem hình ảnh</button>
+                    <button id="btnExportWord" class="btn btn-success btn-sm" disabled>Xuất sang Word</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <textarea id="resultText" class="form-control" readonly></textarea>
+            </div>
+        </div>
+
+        <!-- Images Modal -->
+        <div class="modal fade" id="imagesModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Hình ảnh từ OCR</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="imagesContainer"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Generate hardware ID using browser fingerprinting
+        async function generateHardwareId() {
+            const fpPromise = import('https://openfpcdn.io/fingerprintjs/v3')
+                .then(FingerprintJS => FingerprintJS.load());
+            
+            const fp = await fpPromise;
+            const result = await fp.get();
+
+            // Get some additional browser info
+            const cpuCores = navigator.hardwareConcurrency || '';
+            const platform = navigator.platform || '';
+            const userAgent = navigator.userAgent || '';
+            
+            // Create combined hardware info
+            const hardwareInfo = {
+                cpu_id: result.visitorId + cpuCores,
+                bios_serial: platform + result.visitorId.substring(0, 8),
+                motherboard_serial: userAgent.slice(0, 20) + result.visitorId.substring(8, 16)
+            };
+            
+            // Get hardware ID from server
+            try {
+                const response = await fetch('/api/hardware-id', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(hardwareInfo)
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('hardwareId').value = data.hardware_id;
+                    updateActivationStatus(data.activated);
+                } else {
+                    logMessage('Lỗi: ' + data.error);
+                }
+            } catch (error) {
+                logMessage('Lỗi khi lấy Hardware ID: ' + error);
+            }
+        }
+
+        function updateActivationStatus(activated) {
+            const statusElement = document.getElementById('activationStatus');
+            const fileInput = document.getElementById('pdfFile');
+            
+            if (activated) {
+                statusElement.className = 'alert alert-success';
+                statusElement.textContent = 'Trạng thái: ĐÃ KÍCH HOẠT';
+                fileInput.disabled = false;
+                logMessage('Phần mềm đã được kích hoạt, sẵn sàng sử dụng');
+            } else {
+                statusElement.className = 'alert alert-warning';
+                statusElement.textContent = 'Trạng thái: CHƯA KÍCH HOẠT';
+                fileInput.disabled = true;
+                logMessage('Vui lòng kích hoạt phần mềm trước khi sử dụng');
+            }
+        }
+
+        function logMessage(message) {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            logArea.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function updateProgress(percent, message) {
+            const progressBar = document.getElementById('progressBar');
+            const statusText = document.getElementById('statusText');
+            
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+            progressBar.setAttribute('aria-valuenow', percent);
+            
+            if (message) {
+                statusText.textContent = message;
+                logMessage(message);
+            }
+        }
+
+        async function processOCR(formData) {
+            try {
+                updateProgress(10, 'Đang tải file lên...');
+                
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateProgress(100, 'Xử lý OCR hoàn tất thành công');
+                    
+                    // Hiển thị kết quả
+                    document.getElementById('resultContainer').style.display = 'block';
+                    document.getElementById('resultText').value = result.text;
+                    
+                    // Lưu kết quả ID để tải hình ảnh sau này
+                    window.resultId = result.result_id;
+                    
+                    // Kích hoạt nút xuất Word và xem hình ảnh
+                    document.getElementById('btnExportWord').disabled = false;
+                    
+                    if (result.image_count > 0) {
+                        document.getElementById('btnViewImages').disabled = false;
+                        logMessage(`Tìm thấy ${result.image_count} hình ảnh trong kết quả OCR`);
+                    } else {
+                        document.getElementById('btnViewImages').disabled = true;
+                        logMessage("Không tìm thấy hình ảnh trong kết quả OCR");
+                    }
+                    
+                } else {
+                    updateProgress(0, 'Lỗi: ' + result.error);
+                }
+            } catch (error) {
+                updateProgress(0, 'Lỗi xử lý: ' + error);
+            }
+        }
+
+        async function loadImages() {
+            if (!window.resultId) {
+                logMessage('Không có kết quả OCR để hiển thị hình ảnh');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/results/${window.resultId}`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    const imagesContainer = document.getElementById('imagesContainer');
+                    imagesContainer.innerHTML = '';
+                    
+                    if (result.image_count === 0) {
+                        imagesContainer.innerHTML = '<div class="text-center">Không có hình ảnh để hiển thị</div>';
+                        return;
+                    }
+                    
+                    // Tạo yêu cầu lấy từng hình ảnh 
+                    const imagePromises = [];
+                    for (let i = 1; i <= result.image_count; i++) {
+                        const imageId = `img-${i}.jpeg`;
+                        imagePromises.push(fetch(`/images/${window.resultId}/${imageId}`));
+                    }
+                    
+                    const imageResponses = await Promise.all(imagePromises);
+                    
+                    for (let i = 0; i < imageResponses.length; i++) {
+                        const imageId = `img-${i+1}.jpeg`;
+                        
+                        if (imageResponses[i].ok) {
+                            const blob = await imageResponses[i].blob();
+                            const imageUrl = URL.createObjectURL(blob);
+                            
+                            const imageDiv = document.createElement('div');
+                            imageDiv.className = 'mb-4';
+                            imageDiv.innerHTML = `
+                                <h5 class="text-primary">Hình ảnh: ${imageId}</h5>
+                                <div class="text-center">
+                                    <img src="${imageUrl}" class="img-fluid mb-2">
+                                </div>
+                            `;
+                            
+                            imagesContainer.appendChild(imageDiv);
+                        }
+                    }
+                } else {
+                    logMessage('Lỗi khi tải hình ảnh: ' + result.error);
+                }
+            } catch (error) {
+                logMessage('Lỗi khi tải hình ảnh: ' + error);
+            }
+        }
+
+        // Event Listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            generateHardwareId();
+            
+            const uploadForm = document.getElementById('uploadForm');
+            const fileInput = document.getElementById('pdfFile');
+            const processBtn = document.getElementById('processBtn');
+            const fileInfo = document.getElementById('fileInfo');
+            const btnViewImages = document.getElementById('btnViewImages');
+            const imagesModal = new bootstrap.Modal(document.getElementById('imagesModal'));
+            
+            fileInput.addEventListener('change', function() {
+                if (this.files && this.files[0]) {
+                    const file = this.files[0];
+                    if (file.type !== 'application/pdf') {
+                        fileInfo.textContent = 'Vui lòng chọn file PDF';
+                        processBtn.disabled = true;
+                        return;
+                    }
+                    
+                    fileInfo.textContent = `Đã chọn: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+                    processBtn.disabled = false;
+                    logMessage(`File đã chọn: ${file.name}`);
+                } else {
+                    fileInfo.textContent = 'Chưa chọn file nào';
+                    processBtn.disabled = true;
+                }
+            });
+            
+            uploadForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                if (!fileInput.files || !fileInput.files[0]) {
+                    logMessage('Vui lòng chọn file PDF trước');
+                    return;
+                }
+                
+                const formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                formData.append('hardware_id', document.getElementById('hardwareId').value);
+                
+                processBtn.disabled = true;
+                updateProgress(0, 'Đang bắt đầu xử lý OCR...');
+                
+                processOCR(formData).finally(() => {
+                    processBtn.disabled = false;
+                });
+            });
+            
+            btnViewImages.addEventListener('click', function() {
+                loadImages().then(() => {
+                    imagesModal.show();
+                });
+            });
+            
+            document.getElementById('btnExportWord').addEventListener('click', function() {
+                alert('Tính năng này sẽ được triển khai sau. Hiện tại bạn có thể sao chép nội dung và dán vào Word.');
+            });
+        });
+    </script>
+    <script src="https://openfpcdn.io/fingerprintjs/v3" async></script>
+</body>
+</html>
