@@ -61,7 +61,7 @@ def get_mineru_token():
     
     try:
         rsa_private_key = load_rsa_private_key_from_xml(PRIVATE_KEY_XML)
-        github_url = "https://raw.githubusercontent.com/thayphuctoan/pconvert/refs/heads/main/chia-khoa-pdf"
+        github_url = "https://raw.githubusercontent.com/thayphuctoan/pconvert/refs/heads/main/ocr-pdf"
         response = requests.get(github_url, timeout=10)
         response.raise_for_status()
         
